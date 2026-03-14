@@ -1,15 +1,16 @@
 import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
+import { adminUserOps } from '../functions/adminUserOps/resource';
 
 const schema = a.schema({
   UserRecord: a
     .model({
+      cognitoId: a.string().required(),
       name: a.string().required(),
       username: a.string().required(),
-      passwordHash: a.string().required(),
       role: a.string().required(),
     })
-    .secondaryIndexes((index) => [index('username')])
-    .authorization((allow) => [allow.publicApiKey()]),
+    .secondaryIndexes((index) => [index('username'), index('cognitoId')])
+    .authorization((allow) => [allow.authenticated()]),
 
   Patient: a
     .model({
@@ -21,7 +22,7 @@ const schema = a.schema({
       gender: a.string().required(),
     })
     .secondaryIndexes((index) => [index('idNumber')])
-    .authorization((allow) => [allow.publicApiKey()]),
+    .authorization((allow) => [allow.authenticated()]),
 
   PatientWidget: a
     .model({
@@ -32,7 +33,7 @@ const schema = a.schema({
       updatedBy: a.string().required(),
     })
     .secondaryIndexes((index) => [index('patientId')])
-    .authorization((allow) => [allow.publicApiKey()]),
+    .authorization((allow) => [allow.authenticated()]),
 
   WidgetPermission: a
     .model({
@@ -40,7 +41,7 @@ const schema = a.schema({
       rolesAllowedToEdit: a.string().array().required(),
     })
     .secondaryIndexes((index) => [index('widgetType')])
-    .authorization((allow) => [allow.publicApiKey()]),
+    .authorization((allow) => [allow.authenticated()]),
 
   WidgetConfig: a
     .model({
@@ -49,7 +50,7 @@ const schema = a.schema({
       options: a.string().array().required(),
     })
     .secondaryIndexes((index) => [index('widgetType')])
-    .authorization((allow) => [allow.publicApiKey()]),
+    .authorization((allow) => [allow.authenticated()]),
 
   AuditLogEntry: a
     .model({
@@ -62,7 +63,7 @@ const schema = a.schema({
     })
     .secondaryIndexes((index) => [index('patientId')])
     // Audit log is append-only: deny update/delete to prevent history tampering
-    .authorization((allow) => [allow.publicApiKey().to(['create', 'read'])]),
+    .authorization((allow) => [allow.authenticated().to(['create', 'read'])]),
 
   RoleDefinition: a
     .model({
@@ -71,7 +72,37 @@ const schema = a.schema({
       isBuiltIn: a.boolean().required(),
     })
     .secondaryIndexes((index) => [index('roleId')])
-    .authorization((allow) => [allow.publicApiKey()]),
+    .authorization((allow) => [allow.authenticated()]),
+
+  userAdminCreate: a
+    .mutation()
+    .arguments({
+      username: a.string().required(),
+      password: a.string().required(),
+      role: a.string().required(),
+    })
+    .returns(a.string().required())
+    .handler(a.handler.function(adminUserOps))
+    .authorization((allow) => [allow.authenticated()]),
+
+  userAdminSetPassword: a
+    .mutation()
+    .arguments({
+      username: a.string().required(),
+      password: a.string().required(),
+    })
+    .returns(a.string().required())
+    .handler(a.handler.function(adminUserOps))
+    .authorization((allow) => [allow.authenticated()]),
+
+  userAdminDelete: a
+    .mutation()
+    .arguments({
+      username: a.string().required(),
+    })
+    .returns(a.string().required())
+    .handler(a.handler.function(adminUserOps))
+    .authorization((allow) => [allow.authenticated()]),
 });
 
 export type Schema = ClientSchema<typeof schema>;
@@ -79,9 +110,6 @@ export type Schema = ClientSchema<typeof schema>;
 export const data = defineData({
   schema,
   authorizationModes: {
-    defaultAuthorizationMode: 'apiKey',
-    // TODO: replace API key auth with Cognito/IAM before production.
-    // API key is intentionally short-lived for sandbox use only.
-    apiKeyAuthorizationMode: { expiresInDays: 30 },
+    defaultAuthorizationMode: 'userPool',
   },
 });

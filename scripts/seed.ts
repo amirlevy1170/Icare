@@ -6,19 +6,39 @@
  */
 import { Amplify } from 'aws-amplify';
 import { generateClient } from 'aws-amplify/data';
+import {
+  CognitoIdentityProviderClient,
+  AdminCreateUserCommand,
+  AdminSetUserPasswordCommand,
+  AdminDeleteUserCommand,
+  ListUsersCommand,
+} from '@aws-sdk/client-cognito-identity-provider';
 import type { Schema } from '../amplify/data/resource';
 import outputs from '../amplify_outputs.json';
 
 Amplify.configure(outputs);
 const client = generateClient<Schema>();
 
+// ─── Cognito setup ───────────────────────────────────────────
+
+const userPoolId = (outputs as any).auth?.user_pool_id as string | undefined;
+if (!userPoolId) {
+  throw new Error(
+    'Could not find user_pool_id in amplify_outputs.json. ' +
+    'Make sure auth is deployed (run `ampx sandbox` first).',
+  );
+}
+
+const region = (outputs as any).auth?.aws_region as string | undefined ?? 'us-east-1';
+const cognitoClient = new CognitoIdentityProviderClient({ region });
+
 // ─── Seed Data ───────────────────────────────────────────────
 
 const USERS = [
-  { name: 'מנהל מערכת', username: 'sarah', passwordHash: 'mock_hash_1234', role: 'admin' },
-  { name: 'ד"ר דוד לוי',  username: 'david', passwordHash: 'mock_hash_1234', role: 'doctor' },
-  { name: 'נועה מזרחי',   username: 'noa',   passwordHash: 'mock_hash_1234', role: 'nurse' },
-  { name: 'יוסי בן-ארי',  username: 'yossi', passwordHash: 'mock_hash_1234', role: 'caregiver' },
+  { name: 'שרה כהן', username: 'sarah', password: '1234', role: 'admin' },
+  { name: 'ד"ר דוד לוי',  username: 'david', password: '1234', role: 'doctor' },
+  { name: 'נועה מזרחי',   username: 'noa',   password: '1234', role: 'nurse' },
+  { name: 'יוסי בן-ארי',  username: 'yossi', password: '1234', role: 'caregiver' },
 ];
 
 const PATIENTS = [
@@ -209,6 +229,32 @@ async function main() {
     if (!process.argv.includes('--force')) process.exit(0);
 
     console.log('--force detected, clearing existing data...');
+
+    // Delete all Cognito users first
+    console.log('Deleting Cognito users...');
+    let paginationToken: string | undefined;
+    do {
+      const listRes = await cognitoClient.send(
+        new ListUsersCommand({
+          UserPoolId: userPoolId,
+          PaginationToken: paginationToken,
+        }),
+      );
+      const cognitoUsers = listRes.Users ?? [];
+      await Promise.all(
+        cognitoUsers.map((u) =>
+          cognitoClient.send(
+            new AdminDeleteUserCommand({
+              UserPoolId: userPoolId,
+              Username: u.Username!,
+            }),
+          ),
+        ),
+      );
+      paginationToken = listRes.PaginationToken;
+    } while (paginationToken);
+    console.log('Cognito users deleted.');
+
     const [roles, users, perms, configs, patients, widgets] = await Promise.all([
       client.models.RoleDefinition.list(),
       client.models.UserRecord.list(),
@@ -232,9 +278,42 @@ async function main() {
     client.models.RoleDefinition.create(r),
   );
 
-  await seedInBatches('users', USERS, (u) =>
-    client.models.UserRecord.create(u),
-  );
+  // Seed users: create in Cognito first, then create DynamoDB UserRecord
+  console.log(`Seeding ${USERS.length} users...`);
+  for (const u of USERS) {
+    const createRes = await cognitoClient.send(
+      new AdminCreateUserCommand({
+        UserPoolId: userPoolId,
+        Username: u.username,
+        MessageAction: 'SUPPRESS',
+        UserAttributes: [
+          { Name: 'custom:role', Value: u.role },
+        ],
+      }),
+    );
+
+    await cognitoClient.send(
+      new AdminSetUserPasswordCommand({
+        UserPoolId: userPoolId,
+        Username: u.username,
+        Password: u.password,
+        Permanent: true,
+      }),
+    );
+
+    const sub = createRes.User?.Attributes?.find((a) => a.Name === 'sub')?.Value;
+    if (!sub) throw new Error(`Failed to get Cognito sub for user ${u.username}`);
+
+    await client.models.UserRecord.create({
+      cognitoId: sub,
+      name: u.name,
+      username: u.username,
+      role: u.role,
+    });
+
+    console.log(`  Created user: ${u.username}`);
+  }
+  console.log(`  Done: ${USERS.length} users`);
 
   await seedInBatches('widget permissions', PERMISSIONS, (p) =>
     client.models.WidgetPermission.create(p),

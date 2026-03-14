@@ -1,4 +1,5 @@
 import { generateClient } from 'aws-amplify/data';
+import { signIn, signOut, getCurrentUser, fetchUserAttributes } from 'aws-amplify/auth';
 import type { Schema } from '../../amplify/data/resource';
 import type { DataService, CreateUserInput, CreatePatientInput } from './DataService';
 import {
@@ -30,19 +31,6 @@ async function listAll<T>(
   return results;
 }
 
-// ─── Password hashing ─────────────────────────────────────────
-// TODO: Replace with Cognito authentication before production.
-// This scheme is intentionally trivial (sandbox/demo only) — the hash
-// is reversible and validated client-side, which is not safe for real users.
-
-function mockHash(plain: string): string {
-  return `mock_hash_${plain}`;
-}
-
-function checkPassword(plain: string, hash: string): boolean {
-  return hash === mockHash(plain);
-}
-
 // ─── Type mappers ─────────────────────────────────────────────
 
 type UserRecord = Schema['UserRecord']['type'];
@@ -53,12 +41,11 @@ type WidgetConfigRecord = Schema['WidgetConfig']['type'];
 type AuditLogRecord = Schema['AuditLogEntry']['type'];
 type RoleRecord = Schema['RoleDefinition']['type'];
 
-function toUser(r: UserRecord, exposeHash = false): User {
+function toUser(r: UserRecord): User {
   return {
     id: r.id,
     name: r.name,
     username: r.username,
-    passwordHash: exposeHash ? r.passwordHash : '',
     role: r.role,
   };
 }
@@ -130,10 +117,31 @@ export class AmplifyDataService implements DataService {
   // ─── Auth ──────────────────────────────────────────────────
 
   async login(username: string, password: string): Promise<User | null> {
-    const { data } = await this.client.models.UserRecord.listUserRecordByUsername({ username });
-    const record = data[0];
-    if (!record || !checkPassword(password, record.passwordHash)) return null;
-    return toUser(record);
+    try {
+      await signIn({ username, password });
+    } catch {
+      return null;
+    }
+    return this.getCurrentSession();
+  }
+
+  async getCurrentSession(): Promise<User | null> {
+    try {
+      const cognitoUser = await getCurrentUser();
+      const attrs = await fetchUserAttributes();
+      const sub = attrs.sub ?? cognitoUser.userId;
+      if (!sub) return null;
+
+      const { data } = await this.client.models.UserRecord.listUserRecordByCognitoId({ cognitoId: sub });
+      const record = data[0];
+      return record ? toUser(record) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async logout(): Promise<void> {
+    await signOut();
   }
 
   async getUserById(id: string): Promise<User | null> {
@@ -252,13 +260,22 @@ export class AmplifyDataService implements DataService {
     const existing = await this.client.models.UserRecord.listUserRecordByUsername({ username: input.username });
     if (existing.data.length > 0) throw new Error('שם המשתמש כבר קיים');
 
-    const { data } = await this.client.models.UserRecord.create({
-      name: input.name,
+    const { data: cognitoIdData, errors } = await this.client.mutations.userAdminCreate({
       username: input.username,
-      passwordHash: mockHash(input.password),
+      password: input.password,
       role: input.role,
     });
-    if (!data) throw new Error('Failed to create user');
+    if (errors && errors.length > 0) throw new Error(errors[0].message);
+    const cognitoId = cognitoIdData;
+    if (!cognitoId) throw new Error('Failed to create Cognito user');
+
+    const { data } = await this.client.models.UserRecord.create({
+      cognitoId,
+      name: input.name,
+      username: input.username,
+      role: input.role,
+    });
+    if (!data) throw new Error('Failed to create user record');
     return toUser(data);
   }
 
@@ -271,11 +288,18 @@ export class AmplifyDataService implements DataService {
       if (dup.data.length > 0) throw new Error('שם המשתמש כבר קיים');
     }
 
+    if (updates.password) {
+      const { errors } = await this.client.mutations.userAdminSetPassword({
+        username: existing.username,
+        password: updates.password,
+      });
+      if (errors && errors.length > 0) throw new Error(errors[0].message);
+    }
+
     const { data: updated } = await this.client.models.UserRecord.update({
       id,
       name: updates.name ?? existing.name,
       username: updates.username ?? existing.username,
-      passwordHash: updates.password ? mockHash(updates.password) : existing.passwordHash,
       role: updates.role ?? existing.role,
     });
     if (!updated) throw new Error('Failed to update user');
@@ -285,6 +309,10 @@ export class AmplifyDataService implements DataService {
   async deleteUser(id: string): Promise<void> {
     const { data } = await this.client.models.UserRecord.get({ id });
     if (!data) throw new Error('משתמש לא נמצא');
+
+    const { errors } = await this.client.mutations.userAdminDelete({ username: data.username });
+    if (errors && errors.length > 0) throw new Error(errors[0].message);
+
     await this.client.models.UserRecord.delete({ id });
   }
 
