@@ -2,6 +2,7 @@
 /out-tsc
 /dist
 /.amplify
+/amplify_outputs.json
 
 /node_modules
 npm-debug.log*

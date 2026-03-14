@@ -202,6 +202,32 @@ async function seedInBatches<T>(
 async function main() {
   console.log('=== ICare Seed Script ===\n');
 
+  // Guard: abort if data already exists to prevent duplicates
+  const { data: existingRoles } = await client.models.RoleDefinition.list({ limit: 1 });
+  if (existingRoles.length > 0) {
+    console.log('Database already contains data. Run with --force to re-seed (deletes all existing records first).');
+    if (!process.argv.includes('--force')) process.exit(0);
+
+    console.log('--force detected, clearing existing data...');
+    const [roles, users, perms, configs, patients, widgets] = await Promise.all([
+      client.models.RoleDefinition.list(),
+      client.models.UserRecord.list(),
+      client.models.WidgetPermission.list(),
+      client.models.WidgetConfig.list(),
+      client.models.Patient.list(),
+      client.models.PatientWidget.list(),
+    ]);
+    await Promise.all([
+      ...roles.data.map((r) => client.models.RoleDefinition.delete({ id: r.id })),
+      ...users.data.map((u) => client.models.UserRecord.delete({ id: u.id })),
+      ...perms.data.map((p) => client.models.WidgetPermission.delete({ id: p.id })),
+      ...configs.data.map((c) => client.models.WidgetConfig.delete({ id: c.id })),
+      ...patients.data.map((p) => client.models.Patient.delete({ id: p.id })),
+      ...widgets.data.map((w) => client.models.PatientWidget.delete({ id: w.id })),
+    ]);
+    console.log('Cleared.\n');
+  }
+
   await seedInBatches('roles', BUILT_IN_ROLES, (r) =>
     client.models.RoleDefinition.create(r),
   );
