@@ -13,7 +13,7 @@ export const handler: AppSyncResolverHandler<
   { username?: string; password?: string; role?: string },
   string
 > = async (event) => {
-  const { fieldName } = event;
+  const { fieldName } = event.info;
   const args = event.arguments;
 
   if (fieldName === 'userAdminCreate') {
