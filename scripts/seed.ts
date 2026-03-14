@@ -15,7 +15,7 @@ const client = generateClient<Schema>();
 // ─── Seed Data ───────────────────────────────────────────────
 
 const USERS = [
-  { name: 'מנהל מערכת', username: 'admin', passwordHash: 'mock_hash_1234', role: 'admin' },
+  { name: 'מנהל מערכת', username: 'sarah', passwordHash: 'mock_hash_1234', role: 'admin' },
   { name: 'ד"ר דוד לוי',  username: 'david', passwordHash: 'mock_hash_1234', role: 'doctor' },
   { name: 'נועה מזרחי',   username: 'noa',   passwordHash: 'mock_hash_1234', role: 'nurse' },
   { name: 'יוסי בן-ארי',  username: 'yossi', passwordHash: 'mock_hash_1234', role: 'caregiver' },

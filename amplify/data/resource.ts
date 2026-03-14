@@ -61,7 +61,8 @@ const schema = a.schema({
       timestamp: a.string().required(),
     })
     .secondaryIndexes((index) => [index('patientId')])
-    .authorization((allow) => [allow.publicApiKey()]),
+    // Audit log is append-only: deny update/delete to prevent history tampering
+    .authorization((allow) => [allow.publicApiKey().to(['create', 'read'])]),
 
   RoleDefinition: a
     .model({
@@ -79,6 +80,8 @@ export const data = defineData({
   schema,
   authorizationModes: {
     defaultAuthorizationMode: 'apiKey',
-    apiKeyAuthorizationMode: { expiresInDays: 365 },
+    // TODO: replace API key auth with Cognito/IAM before production.
+    // API key is intentionally short-lived for sandbox use only.
+    apiKeyAuthorizationMode: { expiresInDays: 30 },
   },
 });

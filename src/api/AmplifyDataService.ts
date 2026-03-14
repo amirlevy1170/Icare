@@ -30,7 +30,10 @@ async function listAll<T>(
   return results;
 }
 
-// ─── Password hashing (same scheme as MockDataService) ────────
+// ─── Password hashing ─────────────────────────────────────────
+// TODO: Replace with Cognito authentication before production.
+// This scheme is intentionally trivial (sandbox/demo only) — the hash
+// is reversible and validated client-side, which is not safe for real users.
 
 function mockHash(plain: string): string {
   return `mock_hash_${plain}`;
@@ -141,18 +144,23 @@ export class AmplifyDataService implements DataService {
   // ─── Patients ──────────────────────────────────────────────
 
   async searchPatients(query: string): Promise<Patient[]> {
-    const q = query.toLowerCase().trim();
+    const q = query.trim();
     if (!q) return [];
+
+    // Exact ID lookup via secondary index — fast O(1) path
+    if (/^\d+$/.test(q)) {
+      const { data } = await this.client.models.Patient.listPatientByIdNumber({ idNumber: q });
+      return data.map(toPatient);
+    }
+
+    // Name search: push the filter to AppSync/DynamoDB to reduce data transfer
     const all = await listAll((nextToken) =>
-      this.client.models.Patient.list({ nextToken }),
+      this.client.models.Patient.list({
+        filter: { fullName: { contains: q } },
+        nextToken,
+      }),
     );
-    return all
-      .filter(
-        (p) =>
-          p.fullName.toLowerCase().includes(q) ||
-          p.idNumber.includes(q),
-      )
-      .map(toPatient);
+    return all.map(toPatient);
   }
 
   async getPatientById(id: string): Promise<Patient | null> {
